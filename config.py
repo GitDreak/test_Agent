@@ -19,7 +19,7 @@ USE_ONLINE = True
 SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 # 硅基流动上的模型名，和图1一致
-ONLINE_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+ONLINE_MODEL = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
 
 # ==========================================
 #  💻 离线配置 - 本地 Ollama

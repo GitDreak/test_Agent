@@ -1,42 +1,39 @@
 """
 LLM 客户端模块
-采用策略模式，统一在线/离线两种调用方式
-- 在线: 硅基流动 (OpenAI 兼容接口)
-- 离线: 本地 Ollama (OpenAI 兼容接口)
+
+- 在线: 硅基流动 (OpenAI 兼容协议)
+
+- 离线: 本地 Ollama
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 import requests
 from abc import ABC, abstractmethod
-
 import config
 
 # ==================================================
-#  🧱 抽象基类 - 定义统一接口
+
+#  🧱 抽象基类
+
 # ==================================================
 class LLMClient(ABC):
-    """所有 LLM 客户端的基类，保证对外接口一致"""
+    @abstractmethod
+    def chat(self, messages: list[dict], **kwargs) -> str: ...
 
     @abstractmethod
-    def chat(self, messages: list[dict], **kwargs) -> str:
-        """非流式：一次性返回完整回复"""
-        pass
+    def chat_stream(self, messages: list[dict]): ...
 
     @abstractmethod
-    def chat_stream(self, messages: list[dict]):
-        """流式：yield 每个文本片段（打字机效果）"""
-        pass
-
-    @abstractmethod
-    def check_available(self) -> bool:
-        """检测模型是否可用"""
-        pass
+    def check_available(self) -> bool: ...
 
 # ==================================================
+
 #  🌐 在线 - 硅基流动
+
 # ==================================================
 class SiliconFlowClient(LLMClient):
-    """调用硅基流动 API"""
-
     def __init__(self):
         self.api_key = config.SILICONFLOW_API_KEY
         self.base_url = config.SILICONFLOW_BASE_URL
@@ -74,7 +71,7 @@ class SiliconFlowClient(LLMClient):
         return resp.json()["choices"][0]["message"]["content"]
 
     def chat_stream(self, messages: list[dict]):
-        """流式 - OpenAI SSE 协议，用 buffer + \\n\\n 分割保证完整"""
+        """流式 - OpenAI SSE 协议"""
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model": self.model,
@@ -93,7 +90,6 @@ class SiliconFlowClient(LLMClient):
         buffer = ""
         for chunk in resp.iter_content(chunk_size=4096):
             buffer += chunk.decode('utf-8', errors='replace')
-            # SSE 协议: 每条消息以 \n\n 结尾
             while '\n\n' in buffer:
                 event, buffer = buffer.split('\n\n', 1)
                 for line in event.split('\n'):
@@ -112,11 +108,11 @@ class SiliconFlowClient(LLMClient):
                         continue
 
 # ==================================================
+
 #  💻 离线 - 本地 Ollama
+
 # ==================================================
 class LocalOllamaClient(LLMClient):
-    """调用本地 Ollama 服务"""
-
     def __init__(self):
         self.base_url = config.OLLAMA_BASE_URL
         self.model = config.LOCAL_MODEL
@@ -156,10 +152,7 @@ class LocalOllamaClient(LLMClient):
             "model": self.model,
             "messages": messages,
             "stream": True,
-            "options": {
-                "temperature": 0.7,
-                "num_predict": 2048,
-            },
+            "options": {"temperature": 0.7, "num_predict": 2048},
         }
         resp = requests.post(url, json=payload, stream=True, timeout=config.TIMEOUT)
         resp.raise_for_status()
@@ -178,7 +171,9 @@ class LocalOllamaClient(LLMClient):
                 continue
 
 # ==================================================
-#  🏭 工厂函数 - 自动选择 + 降级
+
+#  🏭 工厂函数
+
 # ==================================================
 def create_llm_client() -> LLMClient:
     if config.USE_ONLINE:

@@ -8,8 +8,8 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-from agent import TestAgent
-from llm_client import create_llm_client
+from src.agent import TestAgent
+from src.llm_client import create_llm_client
 
 def main():
     print("=" * 50)
