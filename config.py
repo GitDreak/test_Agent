@@ -26,7 +26,7 @@ ONLINE_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 # ==========================================
 OLLAMA_BASE_URL = "http://localhost:11434"
 # 本地拉取的模型名
-LOCAL_MODEL = "qwen:7b-chat"
+LOCAL_MODEL = "qwen3.5:4b"
 
 # ==========================================
 #  🔄 降级开关
@@ -35,4 +35,4 @@ LOCAL_MODEL = "qwen:7b-chat"
 AUTO_FALLBACK = True
 
 # 连接超时秒数
-TIMEOUT = 30
+TIMEOUT = 120

@@ -4,6 +4,7 @@ LLM 客户端模块
 - 在线: 硅基流动 (OpenAI 兼容接口)
 - 离线: 本地 Ollama (OpenAI 兼容接口)
 """
+import json
 import requests
 from abc import ABC, abstractmethod
 
@@ -17,11 +18,12 @@ class LLMClient(ABC):
 
     @abstractmethod
     def chat(self, messages: list[dict], **kwargs) -> str:
-        """
-        发送消息给模型，返回回复文本
-        :param messages: [{"role": "user", "content": "..."}, ...]
-        :return: 模型回复的纯文本
-        """
+        """非流式：一次性返回完整回复"""
+        pass
+
+    @abstractmethod
+    def chat_stream(self, messages: list[dict]):
+        """流式：yield 每个文本片段（打字机效果）"""
         pass
 
     @abstractmethod
@@ -71,6 +73,44 @@ class SiliconFlowClient(LLMClient):
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
+    def chat_stream(self, messages: list[dict]):
+        """流式 - OpenAI SSE 协议，用 buffer + \\n\\n 分割保证完整"""
+        url = f"{self.base_url}/chat/completions"
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "temperature": 0.7,
+            "max_tokens": 2048,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        resp = requests.post(url, json=payload, headers=headers, stream=True, timeout=config.TIMEOUT)
+        resp.raise_for_status()
+
+        buffer = ""
+        for chunk in resp.iter_content(chunk_size=4096):
+            buffer += chunk.decode('utf-8', errors='replace')
+            # SSE 协议: 每条消息以 \n\n 结尾
+            while '\n\n' in buffer:
+                event, buffer = buffer.split('\n\n', 1)
+                for line in event.split('\n'):
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        return
+                    try:
+                        msg = json.loads(data)
+                        content = msg["choices"][0].get("delta", {}).get("content", "")
+                        if content:
+                            yield content
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+
 # ==================================================
 #  💻 离线 - 本地 Ollama
 # ==================================================
@@ -109,15 +149,38 @@ class LocalOllamaClient(LLMClient):
         resp.raise_for_status()
         return resp.json()["message"]["content"]
 
+    def chat_stream(self, messages: list[dict]):
+        """流式 - Ollama 原生逐行 JSON"""
+        url = f"{self.base_url}/api/chat"
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "options": {
+                "temperature": 0.7,
+                "num_predict": 2048,
+            },
+        }
+        resp = requests.post(url, json=payload, stream=True, timeout=config.TIMEOUT)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            try:
+                chunk = json.loads(line)
+                content = chunk.get("message", {}).get("content", "")
+                if content:
+                    yield content
+                if chunk.get("done"):
+                    break
+            except json.JSONDecodeError:
+                continue
+
 # ==================================================
 #  🏭 工厂函数 - 自动选择 + 降级
 # ==================================================
 def create_llm_client() -> LLMClient:
-    """
-    根据配置创建 LLM 客户端
-    - USE_ONLINE=True: 先尝试硅基流动，失败则降级到本地
-    - USE_ONLINE=False: 直接用本地 Ollama
-    """
     if config.USE_ONLINE:
         client = SiliconFlowClient()
         print("[*] 尝试在线模式 (SiliconFlow)...")
@@ -129,7 +192,6 @@ def create_llm_client() -> LLMClient:
         else:
             raise ConnectionError("在线模式不可用，降级已禁用")
 
-    # 使用本地
     client = LocalOllamaClient()
     if not client.check_available():
         raise ConnectionError("本地 Ollama 不可用，请检查服务是否启动")
