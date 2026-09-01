@@ -1,0 +1,15 @@
+# 虚拟环境
+venv/
+__pycache__/
+*.pyc
+
+# 敏感信息
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# 系统文件
+.DS_Store
+Thumbs.db
