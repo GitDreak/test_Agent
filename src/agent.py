@@ -16,12 +16,12 @@ REACT_PROMPT = """你是一名资深的软件测试工程师，擅长：
 
 {tools_desc}
 
+【重要】即使你认为不需要调用工具，你也必须先用 1 句话说明你的思考过程（Thought），再给出最终答案。
+思考格式：先写一句话说明你打算怎么回答，再写具体答案。
+
 如果有工具返回的结果，请严格基于工具结果回答，不要自己重新计算或瞎编数字。"""
 
 MAX_ITERATIONS = 3
-
-TEST_KEYWORDS = ['黑盒测试', '白盒测试', '冒烟测试', '回归测试', '性能测试', '安全测试', 
-                 'bug报告', 'bug 报告', '测试用例', '覆盖率', '缺陷率', 'bug率']
 
 def parse_react(text: str):
     """从 LLM 回复里提取 Action"""
@@ -43,22 +43,22 @@ def auto_detect_tool(user_input: str):
     """自动检测用户意图"""
     text = user_input.lower()
 
-    # ========== 🎯 新增：验证等式（如 "测试3+3=0?"、"1+1=2对吗"）==========
+    # 验证等式（如 "测试3+3=0?"）
     eq_match = re.search(r'([\d\.]+)\s*[+\-*/×÷]\s*([\d\.]+)\s*=\s*([\d\.]+)', user_input)
     if eq_match:
         left = eq_match.group(1).replace('×', '*').replace('÷', '/')
         op = re.search(r'[+\-*/×÷]', user_input).group().replace('×', '*').replace('÷', '/')
         right = eq_match.group(3)
-        return "verify_eq", f"{left}{op}{right.split('=')[0]}"
+        return "verify_eq", f"{left}{op}{right}"
 
-    # 去掉所有中文字符，看剩下的是不是纯数学表达式
+    # 纯数学表达式
     stripped = re.sub(r'[\u4e00-\u9fff\s\?？.,。！!、，]', '', user_input)
     math_match = re.fullmatch(r'[\d\.]+\s*[+\-*/×÷]\s*[\d\.]+', stripped)
     if math_match:
         expr = math_match.group().replace(' ', '').replace('×', '*').replace('÷', '/')
         return "calc", expr
 
-    # 检测计算率/百分比
+    # 计算率/百分比
     has_numbers = bool(re.search(r'\d+', user_input))
     calc_intent = ['算', '计算', '率', '百分比', '覆盖率', 'bug率', '缺陷率', '%', '多少', '等于']
     if has_numbers and any(kw in text for kw in calc_intent):
@@ -74,12 +74,14 @@ def auto_detect_tool(user_input: str):
         elif nums:
             return "calc", nums[0]
 
-    # 检测查知识
-    for kw in ['什么是', '是什么', '介绍一下', '解释一下']:
+    # 查知识/行情/介绍
+    TEST_KEYWORDS = ['黑盒测试', '白盒测试', '冒烟测试', '回归测试', '性能测试', '安全测试', 
+                     'bug报告', 'bug 报告', '测试用例', '覆盖率', '缺陷率', 'bug率',
+                     '软件测试', '测试工程师', '测试职业']
+    for kw in ['什么是', '是什么', '介绍一下', '解释一下', '行情', '趋势', '前景', '发展']:
         if kw in user_input:
-            question_part = user_input.split('?')[0].split('？')[0]
             for tk in TEST_KEYWORDS:
-                if tk in question_part:
+                if tk in user_input:
                     return "query_knowledge", tk
 
     # 检测生成用例
@@ -167,6 +169,72 @@ class TestAgent:
             self.history.append({"role": "user", "content": f"工具 {action} 返回:\n{tool_result}\n请基于此回答。"})
 
         return reply_text
+
+    def chat_stream(self, user_input: str):
+        """流式 + Trace - yield (content_chunk, trace_line)"""
+        trace_lines = []
+        
+        def trace(msg):
+            trace_lines.append(msg)
+            print(msg, flush=True)
+        
+        trace(f"🧑 用户输入: {user_input}")
+        self.history.append({"role": "user", "content": user_input})
+
+        # 自动兜底
+        auto_action, auto_input = auto_detect_tool(user_input)
+        if auto_action:
+            trace(f"🔍 [自动检测] {auto_action}")
+            
+            if auto_action == "verify_eq":
+                reply = verify_equation(user_input)
+            else:
+                trace(f"🔧 调用: {auto_action}({auto_input})")
+                tool_result = execute_tool(auto_action, auto_input)
+                trace(f"📦 返回: {str(tool_result)[:80]}")
+                
+                if auto_action == "calc":
+                    parts = tool_result.split('=', 1)
+                    val = parts[1].strip() if len(parts) > 1 else tool_result
+                    reply = f"✅ {auto_input} = {val}"
+                else:
+                    reply = f"✅ {tool_result}"
+            
+            self.history.append({"role": "assistant", "content": reply})
+            trace(f"📝 输出: {reply}")
+            yield reply, "\n".join(trace_lines)
+            return
+
+        # LLM 流式  ← 注意这里没有多余缩进！
+        full_reply = []
+        for iteration in range(1, MAX_ITERATIONS + 1):
+            trace(f"🧠 [迭代 {iteration}] 思考中...")
+            
+            for chunk in self.llm.chat_stream(self.history):
+                if chunk:
+                    full_reply.append(chunk)
+                    yield chunk, "\n".join(trace_lines)
+            
+            reply_text = "".join(full_reply)
+            self.history.append({"role": "assistant", "content": reply_text})
+            
+            thought_match = re.search(r'思考[:：]\s*(.+?)(?:\n|$)', reply_text[:200])
+            if thought_match:
+                trace(f"💭 思考: {thought_match.group(1).strip()}")
+            else:
+                trace(f"💭 直接回答（无需工具）")
+            
+            trace(f"📝 回复长度: {len(reply_text)} 字符")
+
+            action, action_input = parse_react(reply_text)
+            if not action:
+                break
+            trace(f"🔧 请求工具: {action}({action_input})")
+            tool_result = execute_tool(action, action_input)
+            trace(f"📦 工具返回: {str(tool_result)[:60]}")
+            self.history.append({"role": "user", "content": f"工具 {action} 返回:\n{tool_result}\n请基于此回答。"})
+        
+        yield "", "\n".join(trace_lines)
 
     def reset(self):
         tools_desc = get_tools_description()

@@ -101,10 +101,12 @@ class SiliconFlowClient(LLMClient):
                         return
                     try:
                         msg = json.loads(data)
-                        content = msg["choices"][0].get("delta", {}).get("content", "")
-                        if content:
-                            yield content
-                    except (json.JSONDecodeError, KeyError):
+                        choices = msg.get("choices", [])
+                        if choices:
+                            content = choices[0].get("delta", {}).get("content", "")
+                            if content:
+                                yield content
+                    except (json.JSONDecodeError, KeyError, IndexError):
                         continue
 
 # ==================================================
